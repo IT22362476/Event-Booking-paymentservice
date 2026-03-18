@@ -7,7 +7,7 @@ dotenv.config();
 
 // Add this above your payment route
 app.get('/', (req, res) => {
-  res.send('Payment Service API is up and running!');
+  res.json({ message: 'Payment Service API is up and running!' });
 });
 
 // Basic route for the payment service
