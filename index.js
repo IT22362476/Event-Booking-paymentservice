@@ -5,15 +5,17 @@ const dotenv = require('dotenv');
 // Load environment variables
 dotenv.config();
 
-// Add this above your payment route
+// Parse JSON and urlencoded request bodies
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Health-check route
 app.get('/', (req, res) => {
   res.json({ message: 'Payment Service API is up and running!' });
 });
 
 // Basic route for the payment service
-app.get('/api/payment', (req, res) => {
-  res.json({ message: 'Payment Service is working!' });
-});
+app.use('/api/payment', require('./src/routes/payment.routes'));
 
 // Define the port
 const port = process.env.PORT || 5001;
