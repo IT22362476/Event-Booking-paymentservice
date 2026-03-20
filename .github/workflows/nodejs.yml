@@ -1,31 +1,55 @@
-# name: Node.js CI/CD
+name: Payment Service CI/CD
 
-# on:  
-#   push:  
-#     branches:  
-#       - main
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
 
-# jobs:  
-#   build:  
-#     runs-on: ubuntu-latest
+env:
+  AZURE_WEBAPP_NAME: luma-event-ticket
+  ACR_NAME: eventpayement-aeauh7f0d3h4cwdm
+  IMAGE_NAME: payment-service
+  NODE_VERSION: "18"
 
-#     steps:  
-#       - name: Checkout code  
-#         uses: actions/checkout@v2
+jobs:
+  build-scan-deploy:
+    runs-on: ubuntu-latest
 
-#       - name: Set up Node.js  
-#         uses: actions/setup-node@v2  
-#         with:  
-#           node-version: '18'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-#       - name: Install dependencies  
-#         run: npm install
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
 
-#       - name: Build Docker image  
-#         run: docker build -t ${{ secrets.DOCKER_USERNAME }}/payment-service:latest .
+      - name: Install dependencies
+        run: npm ci
 
-#       - name: Log in to Docker Hub  
-#         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+      - name: Run tests
+        run: npm test
 
-#       - name: Push Docker image to Docker Hub  
-#         run: docker push ${{ secrets.DOCKER_USERNAME }}/payment-service:latest
+      - name: Run npm audit
+        run: npm audit --audit-level=high || true
+
+      - name: Log in to Azure Container Registry
+        run: echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ env.ACR_NAME }}.azurecr.io -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          docker tag ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
