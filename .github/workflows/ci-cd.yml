@@ -9,7 +9,7 @@ env:
   AZURE_WEBAPP_NAME: luma-event-ticket
   ACR_NAME: eventpayement-aeauh7f0d3h4cwdm
   IMAGE_NAME: payment-service
-  NODE_VERSION: "20"
+  NODE_VERSION: "18"
 
 jobs:
   build-scan-deploy:
