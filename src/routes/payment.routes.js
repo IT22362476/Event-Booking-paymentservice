@@ -1,12 +1,13 @@
 const express = require("express");
-const { makepayment } = require("../controllers/payment.controller");
+const { makepayment, refundPayment } = require("../controllers/payment.controller");
 
 const router = express.Router();
 const verifyToken = require("../middleware/auth.middleware");
 
 router.use(verifyToken);
-// Example protected route for processing payments
 
 router.post("/create-checkout-session", makepayment);
+router.post("/", makepayment);
+router.post("/refund", refundPayment);
 
 module.exports = router;
