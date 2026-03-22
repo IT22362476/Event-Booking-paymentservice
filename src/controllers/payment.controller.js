@@ -1,6 +1,10 @@
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const { sendNotificationEvent } = require("../services/notification.service");
+const endpointSecret = process.env.STRIPE_ENDPOINT_SECRET;
+const axios = require('axios');
+const Payment = require("../models/payment.model");
 
+// Helper to build metadata for notifications
 function buildPaymentMetadata(payload = {}, session = null) {
   return {
     bookingId: payload.bookingId || null,
@@ -33,91 +37,138 @@ async function dispatchNotification(payload, token) {
 const paymentController = {
   async makepayment(req, res) {
     try {
-      // Accept either an array body or an object with a `products` key
-      const products = Array.isArray(req.body)
-        ? req.body
-        : req.body?.products;
+      const { products, bookingId } = req.body;
+      const userToken = req.token;
+      const userId = req.user.id || req.user.userId || req.user._id;
 
-      console.log("Received products:", products);
-
-      if (!products || !Array.isArray(products) || products.length === 0) {
-        return res.status(400).json({ error: "No products provided" });
-      }
-
-      // Prepare line items for Stripe checkout session
-      const lineItems = products.map((product) => ({
-        price_data: {
-          currency: "lkr",
-          product_data: {
-            name: `Event ${product.menuItemName}`,
-            images: product.image
-              ? [product.image]
-              : [
-                  "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?ixlib=rb-1.2.1&auto=format&fit=crop&w=500&q=60",
-                ],
-          },
-          unit_amount: Math.round(product.price * 100),
-        },
-        quantity: product.quantity,
-      }));
-
-      console.log("Line Items for Stripe:", lineItems);
-
-      // Create a Stripe checkout session
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
-        line_items: lineItems,
+        line_items: products.map(p => ({
+          price_data: {
+            currency: "lkr",
+            product_data: {
+              name: p.menuItemName,
+              images: p.image
+                ? [p.image]
+                : ["https://images.unsplash.com/photo-1546069901-ba9599a7e63c?ixlib=rb-1.2.1&auto=format&fit=crop&w=500&q=60"],
+            },
+            unit_amount: Math.round(p.price * 100),
+          },
+          quantity: p.quantity,
+        })),
         mode: "payment",
+        client_reference_id: bookingId,
+        metadata: {
+          authToken: userToken,
+          userId: userId
+        },
         success_url: "http://localhost:3000/paymentsuccess",
         cancel_url: "http://localhost:3000/paymentcanceled",
       });
 
-      const actorUserId = req.user?.id || req.user?._id || req.body?.userId;
-      if (actorUserId && req.token) {
+      // Dispatch Notification for Checkout Created
+      if (userId && userToken) {
         await dispatchNotification(
           {
             eventType: "PAYMENT_CHECKOUT_CREATED",
             source: "PAYMENT_SERVICE",
             entityId: session.id,
             entityType: "PAYMENT",
-            actorUserId,
-            recipients: {
-              userId: actorUserId,
-            },
+            actorUserId: userId,
+            recipients: { userId: userId },
             metadata: buildPaymentMetadata(req.body, session),
           },
-          req.token,
+          userToken,
         );
       }
 
-      // Return BOTH the session ID and URL to the frontend
-      res.json({
-        id: session.id,
-        url: session.url
-      });
-
+      res.json({ id: session.id, url: session.url });
     } catch (error) {
       console.error("Error creating checkout session:", error);
-      res.status(500).json({ error: "An error occurred during checkout" });
+      res.status(500).json({ error: error.message || "An error occurred during checkout" });
+    }
+  },
+
+  async handleWebhook(req, res) {
+    const sig = req.headers["stripe-signature"];
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+        const bookingId = session.client_reference_id;
+        const authToken = session.metadata.authToken;
+
+        if (bookingId) {
+          try {
+            // 1. Update Booking Service
+            const response = await axios.patch(
+              `http://localhost:8080/api/bookings/${bookingId}/payment`,
+              { paymentStatus: "SUCCESS" },
+              { headers: { Authorization: `Bearer ${authToken}` } }
+            );
+
+            // 2. Extract eventName from response
+            const updatedBooking = response.data;
+            const eventName = updatedBooking.eventName || "Unknown Event";
+
+            // 3. Save to MongoDB
+            const newPayment = new Payment({
+              bookingId: bookingId,
+              eventName: eventName,
+              stripeSessionId: session.id,
+              userId: session.metadata.userId,
+              amount: session.amount_total / 100,
+              currency: session.currency.toUpperCase(),
+              status: "SUCCESS"
+            });
+
+            await newPayment.save();
+            console.log(`💾 Payment saved for event: ${eventName}`);
+
+          } catch (error) {
+            console.error("❌ Webhook processing failed:", error.message);
+          }
+        }
+      }
+      res.status(200).send("Event received");
+    } catch (err) {
+      console.error("Webhook Signature Error:", err.message);
+      res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+  },
+
+  async getRecentPayments(req, res) {
+    try {
+      const userId = req.user.id || req.user.userId || req.user._id;
+
+      const payments = await Payment.find({ userId: userId })
+        .sort({ createdAt: -1 })
+        .limit(10);
+
+      res.status(200).json(payments);
+    } catch (error) {
+      console.error("Error fetching recent payments:", error);
+      res.status(500).json({ message: "Failed to fetch payment history" });
     }
   },
 
   async refundPayment(req, res) {
     try {
       const refundReference = `refund_${Date.now()}`;
-      const actorUserId = req.user?.id || req.user?._id || req.body?.userId;
+      const userId = req.user?.id || req.user?._id;
 
-      if (actorUserId && req.token) {
+      if (userId && req.token) {
         await dispatchNotification(
           {
             eventType: "PAYMENT_REFUNDED",
             source: "PAYMENT_SERVICE",
             entityId: refundReference,
             entityType: "PAYMENT",
-            actorUserId,
-            recipients: {
-              userId: actorUserId,
-            },
+            actorUserId: userId,
+            recipients: { userId: userId },
             metadata: {
               ...buildPaymentMetadata(req.body),
               paymentId: refundReference,
@@ -136,7 +187,7 @@ const paymentController = {
       console.error("Error processing refund:", error);
       res.status(500).json({ error: "An error occurred during refund" });
     }
-  },
+  }
 };
 
 module.exports = paymentController;

@@ -1,6 +1,11 @@
 const jwt = require("jsonwebtoken");
 
 const verifyToken = (req, res, next) => {
+
+  if (req.originalUrl === '/api/payment/webhook') {
+    return next();
+  }
+  
   const authHeader = req.header("Authorization");
 
   if (!authHeader) {
