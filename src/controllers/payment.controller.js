@@ -4,6 +4,14 @@ const endpointSecret = process.env.STRIPE_ENDPOINT_SECRET;
 const axios = require('axios');
 const Payment = require("../models/payment.model");
 
+function getApiGatewayUrl() {
+  return (process.env.API_GATEWAY_URL || "http://localhost:8080").replace(/\/$/, "");
+}
+
+function getFrontendUrl() {
+  return (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
+}
+
 // Helper to build metadata for notifications
 function buildPaymentMetadata(payload = {}, session = null) {
   return {
@@ -62,8 +70,8 @@ const paymentController = {
           authToken: userToken,
           userId: userId
         },
-        success_url: "http://localhost:3000/paymentsuccess",
-        cancel_url: "http://localhost:3000/paymentcanceled",
+        success_url: `${getFrontendUrl()}/paymentsuccess`,
+        cancel_url: `${getFrontendUrl()}/paymentcanceled`,
       });
 
       // Dispatch Notification for Checkout Created
@@ -105,7 +113,7 @@ const paymentController = {
           try {
             // 1. Update Booking Service
             const response = await axios.patch(
-              `http://localhost:8080/api/bookings/${bookingId}/payment`,
+              `${getApiGatewayUrl()}/api/bookings/${bookingId}/payment`,
               { paymentStatus: "SUCCESS" },
               { headers: { Authorization: `Bearer ${authToken}` } }
             );
@@ -191,3 +199,4 @@ const paymentController = {
 };
 
 module.exports = paymentController;
+
