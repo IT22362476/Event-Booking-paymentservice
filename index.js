@@ -39,9 +39,10 @@ app.use(cors({
   credentials: true
 }));
 
-app.options('*', cors());
 
-
+// 3. Special Middleware for Stripe Webhooks
+// Stripe requires the RAW body to verify signatures.
+// This prevents 'Webhook Error: No webhook payload was provided'
 app.use((req, res, next) => {
   if (req.originalUrl === '/api/payment/webhook') {
     return next(); 
