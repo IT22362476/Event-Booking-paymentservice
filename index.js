@@ -1,11 +1,10 @@
+require("dotenv").config();
+
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const connectDB = require("./src/config/db");
 const paymentRoutes = require("./src/routes/payment.routes");
-
-// Load environment variables
-dotenv.config();
 
 // 1. Connect to Database
 connectDB();
