@@ -1,7 +1,7 @@
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const { sendNotificationEvent } = require("../services/notification.service");
 const endpointSecret = process.env.STRIPE_ENDPOINT_SECRET;
-const axios = require('axios');
+const axios = require("axios");
 const Payment = require("../models/payment.model");
 
 function getApiGatewayUrl() {
@@ -12,7 +12,6 @@ function getFrontendUrl() {
   return (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
 }
 
-// Helper to build metadata for notifications
 function buildPaymentMetadata(payload = {}, session = null) {
   return {
     bookingId: payload.bookingId || null,
@@ -51,14 +50,16 @@ const paymentController = {
 
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
-        line_items: products.map(p => ({
+        line_items: products.map((p) => ({
           price_data: {
             currency: "lkr",
             product_data: {
               name: p.menuItemName,
               images: p.image
                 ? [p.image]
-                : ["https://images.unsplash.com/photo-1549451371-64aa98a6f660?q=80&w=2070&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"],
+                : [
+                    "https://images.unsplash.com/photo-1549451371-64aa98a6f660?q=80&w=2070&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
+                  ],
             },
             unit_amount: Math.round(p.price * 100),
           },
@@ -68,27 +69,11 @@ const paymentController = {
         client_reference_id: bookingId,
         metadata: {
           authToken: userToken,
-          userId: userId
+          userId: userId,
         },
         success_url: `${getFrontendUrl()}/paymentsuccess`,
         cancel_url: `${getFrontendUrl()}/paymentcanceled`,
       });
-
-      // Dispatch Notification for Checkout Created
-      if (userId && userToken) {
-        await dispatchNotification(
-          {
-            eventType: "PAYMENT_CHECKOUT_CREATED",
-            source: "PAYMENT_SERVICE",
-            entityId: session.id,
-            entityType: "PAYMENT",
-            actorUserId: userId,
-            recipients: { userId: userId },
-            metadata: buildPaymentMetadata(req.body, session),
-          },
-          userToken,
-        );
-      }
 
       res.json({ id: session.id, url: session.url });
     } catch (error) {
@@ -111,18 +96,15 @@ const paymentController = {
 
         if (bookingId) {
           try {
-            // 1. Update Booking Service
             const response = await axios.patch(
               `${getApiGatewayUrl()}/api/bookings/${bookingId}/payment`,
               { paymentStatus: "SUCCESS" },
-              { headers: { Authorization: `Bearer ${authToken}` } }
+              { headers: { Authorization: `Bearer ${authToken}` } },
             );
 
-            // 2. Extract eventName from response
-            const updatedBooking = response.data;
-            const eventName = updatedBooking.eventName || "Unknown Event";
+            const updatedBooking = response.data?.data || response.data;
+            const eventName = updatedBooking?.eventName || "Unknown Event";
 
-            // 3. Save to MongoDB
             const newPayment = new Payment({
               bookingId: bookingId,
               eventName: eventName,
@@ -130,17 +112,39 @@ const paymentController = {
               userId: session.metadata.userId,
               amount: session.amount_total / 100,
               currency: session.currency.toUpperCase(),
-              status: "SUCCESS"
+              status: "SUCCESS",
             });
 
             await newPayment.save();
-            console.log(`💾 Payment saved for event: ${eventName}`);
+            console.log(`Payment saved for event: ${eventName}`);
 
+            if (session.metadata.userId && authToken) {
+              await dispatchNotification(
+                {
+                  eventType: "PAYMENT_RECEIVED",
+                  source: "PAYMENT_SERVICE",
+                  entityId: session.id,
+                  entityType: "PAYMENT",
+                  actorUserId: session.metadata.userId,
+                  recipients: { userId: session.metadata.userId },
+                  metadata: {
+                    bookingId: bookingId,
+                    eventTitle: eventName,
+                    paymentId: session.id,
+                    amount: session.amount_total / 100,
+                    currency: (session.currency || "lkr").toUpperCase(),
+                    numberOfTickets: updatedBooking?.numberOfTickets || null,
+                  },
+                },
+                authToken,
+              );
+            }
           } catch (error) {
-            console.error("❌ Webhook processing failed:", error.message);
+            console.error("Webhook processing failed:", error.message);
           }
         }
       }
+
       res.status(200).send("Event received");
     } catch (err) {
       console.error("Webhook Signature Error:", err.message);
@@ -195,8 +199,7 @@ const paymentController = {
       console.error("Error processing refund:", error);
       res.status(500).json({ error: "An error occurred during refund" });
     }
-  }
+  },
 };
 
 module.exports = paymentController;
-
