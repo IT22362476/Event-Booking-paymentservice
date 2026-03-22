@@ -13,27 +13,35 @@ const app = express();
 
 // 2. Configure CORS
 // This fixes the 'CORS error' seen in your browser console
+// 1. Properly parse origins from Azure Env Vars
 const allowedOrigins = [
   process.env.FRONTEND_URL,
-  ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()),
-].filter(Boolean);
+  ...(process.env.ALLOWED_ORIGINS || '').split(','),
+]
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
+// 2. Configure CORS middleware
 app.use(cors({
   origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or server-to-server)
     if (!origin) return callback(null, true);
-    if (!allowedOrigins.length || allowedOrigins.includes(origin)) {
+
+    if (allowedOrigins.includes(origin)) {
       return callback(null, true);
+    } else {
+      console.error(`🔴 CORS blocked for origin: ${origin}`);
+      return callback(new Error('Not allowed by CORS'));
     }
-    return callback(new Error('Not allowed by CORS'));
   },
-  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'], // Added OPTIONS
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'], // Added X-Requested-With
   credentials: true
 }));
 
-// 3. Special Middleware for Stripe Webhooks
-// Stripe requires the RAW body to verify signatures.
-// This prevents 'Webhook Error: No webhook payload was provided'
+app.options('*', cors());
+
+
 app.use((req, res, next) => {
   if (req.originalUrl === '/api/payment/webhook') {
     return next(); 
